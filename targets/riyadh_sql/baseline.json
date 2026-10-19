@@ -1,0 +1,220 @@
+{
+  "target": "riyadh_sql",
+  "finished_at": "2026-10-19T19:23:58+00:00",
+  "agent_code_hash": "c7cfa8efe3e0",
+  "models": {
+    "agent": "gemini-flash-lite-latest",
+    "judge": "gemini-flash-lite-latest"
+  },
+  "metrics": {
+    "cases": 49,
+    "accuracy": 0.898,
+    "judge_pass_rate": 0.8776,
+    "latency_p50_s": 2.065,
+    "latency_p95_s": 4.156,
+    "tokens_in": 20903,
+    "tokens_out": 4085,
+    "judge_tokens_in": 17508,
+    "judge_tokens_out": 1977,
+    "cost_usd": 0.0,
+    "cost_usd_per_question": 0.0
+  },
+  "cases": {
+    "e01": {
+      "score": true,
+      "verdict": "PASS"
+    },
+    "e02": {
+      "score": true,
+      "verdict": "PASS"
+    },
+    "e03": {
+      "score": true,
+      "verdict": "PASS"
+    },
+    "e04": {
+      "score": true,
+      "verdict": "PASS"
+    },
+    "e05": {
+      "score": true,
+      "verdict": "PASS"
+    },
+    "e06": {
+      "score": true,
+      "verdict": "PASS"
+    },
+    "e07": {
+      "score": true,
+      "verdict": "PASS"
+    },
+    "e08": {
+      "score": true,
+      "verdict": "PASS"
+    },
+    "e09": {
+      "score": true,
+      "verdict": "PASS"
+    },
+    "e10": {
+      "score": true,
+      "verdict": "PASS"
+    },
+    "e11": {
+      "score": true,
+      "verdict": "PASS"
+    },
+    "e12": {
+      "score": true,
+      "verdict": "PASS"
+    },
+    "e13": {
+      "score": true,
+      "verdict": "PASS"
+    },
+    "e14": {
+      "score": true,
+      "verdict": "PASS"
+    },
+    "e15": {
+      "score": true,
+      "verdict": "PASS"
+    },
+    "e16": {
+      "score": true,
+      "verdict": "PASS"
+    },
+    "e17": {
+      "score": true,
+      "verdict": "PASS"
+    },
+    "e18": {
+      "score": true,
+      "verdict": "PASS"
+    },
+    "e19": {
+      "score": true,
+      "verdict": "PASS"
+    },
+    "e20": {
+      "score": true,
+      "verdict": "PASS"
+    },
+    "h01": {
+      "score": true,
+      "verdict": "PASS"
+    },
+    "h02": {
+      "score": true,
+      "verdict": "PASS"
+    },
+    "h03": {
+      "score": true,
+      "verdict": "PASS"
+    },
+    "h04": {
+      "score": true,
+      "verdict": "PASS"
+    },
+    "h05": {
+      "score": true,
+      "verdict": "PASS"
+    },
+    "h06": {
+      "score": true,
+      "verdict": "PASS"
+    },
+    "h07": {
+      "score": true,
+      "verdict": "PASS"
+    },
+    "h08": {
+      "score": true,
+      "verdict": "FAIL"
+    },
+    "h09": {
+      "score": false,
+      "verdict": "FAIL"
+    },
+    "h10": {
+      "score": false,
+      "verdict": "FAIL"
+    },
+    "h11": {
+      "score": true,
+      "verdict": "PASS"
+    },
+    "h12": {
+      "score": true,
+      "verdict": "PASS"
+    },
+    "h13": {
+      "score": true,
+      "verdict": "PASS"
+    },
+    "h14": {
+      "score": true,
+      "verdict": "PASS"
+    },
+    "h15": {
+      "score": true,
+      "verdict": "PASS"
+    },
+    "h16": {
+      "score": true,
+      "verdict": "PASS"
+    },
+    "h17": {
+      "score": true,
+      "verdict": "PASS"
+    },
+    "h18": {
+      "score": true,
+      "verdict": "PASS"
+    },
+    "h19": {
+      "score": true,
+      "verdict": "PASS"
+    },
+    "h20": {
+      "score": true,
+      "verdict": "PASS"
+    },
+    "a01": {
+      "score": true,
+      "verdict": "PASS"
+    },
+    "a02": {
+      "score": true,
+      "verdict": "PASS"
+    },
+    "a03": {
+      "score": true,
+      "verdict": "PASS"
+    },
+    "a04": {
+      "score": false,
+      "verdict": "FAIL"
+    },
+    "a05": {
+      "score": true,
+      "verdict": "PASS"
+    },
+    "d01": {
+      "score": true,
+      "verdict": "PASS"
+    },
+    "d02": {
+      "score": true,
+      "verdict": "PASS"
+    },
+    "d03": {
+      "score": false,
+      "verdict": "FAIL"
+    },
+    "d04": {
+      "score": false,
+      "verdict": "FAIL"
+    }
+  }
+}

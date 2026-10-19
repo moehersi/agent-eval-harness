@@ -1,0 +1,97 @@
+name: eval
+
+on:
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  eval:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out the harness
+        uses: actions/checkout@v4
+        with:
+          path: harness-repo
+
+      - name: Check out the agent under test
+        uses: actions/checkout@v4
+        with:
+          repository: moehersi/riyadh-sql-agent
+          path: riyadh-sql-agent
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install dependencies
+        working-directory: harness-repo
+        run: pip install -r requirements.txt
+
+      - name: Build the agent's database
+        working-directory: riyadh-sql-agent
+        run: python load_db.py
+
+      # Both test suites run without an API key. BACKEND=ollama means the agent
+      # module builds a local client at import time instead of a Gemini one, which
+      # would demand a key; no test makes a call.
+      - name: pytest (agent under test)
+        working-directory: riyadh-sql-agent
+        env:
+          BACKEND: ollama
+        run: python -m pytest -q
+
+      - name: pytest (harness)
+        working-directory: harness-repo
+        env:
+          BACKEND: ollama
+          SQL_AGENT_PATH: ${{ github.workspace }}/riyadh-sql-agent
+        run: python -m pytest -q
+
+      - name: Check for an API key
+        id: key
+        env:
+          GOOGLE_API_KEY: ${{ secrets.GOOGLE_API_KEY }}
+        run: |
+          if [ -n "$GOOGLE_API_KEY" ]; then
+            echo "present=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "present=false" >> "$GITHUB_OUTPUT"
+            echo "### Eval skipped" >> "$GITHUB_STEP_SUMMARY"
+            echo "" >> "$GITHUB_STEP_SUMMARY"
+            echo "The repository secret \`GOOGLE_API_KEY\` is not set, so the agent and the" >> "$GITHUB_STEP_SUMMARY"
+            echo "LLM judge cannot run. Both test suites above still ran." >> "$GITHUB_STEP_SUMMARY"
+            echo "Add the secret under Settings -> Secrets and variables -> Actions to enable" >> "$GITHUB_STEP_SUMMARY"
+            echo "the eval, then re-run this workflow." >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      # One run per target folder, one pass per case, then the regression gate.
+      # check_regression.py exits non-zero on a regression, which fails the job.
+      - name: Run the eval and check for regressions
+        if: steps.key.outputs.present == 'true'
+        working-directory: harness-repo
+        env:
+          BACKEND: gemini
+          GOOGLE_API_KEY: ${{ secrets.GOOGLE_API_KEY }}
+          SQL_AGENT_PATH: ${{ github.workspace }}/riyadh-sql-agent
+          PYTHONIOENCODING: utf-8
+        run: |
+          set -o pipefail   # without this, tee's exit code would hide a regression
+          status=0
+          for dir in targets/*/; do
+            target=$(basename "$dir")
+            [ -f "$dir/suite.jsonl" ] || continue
+            echo "## $target" >> "$GITHUB_STEP_SUMMARY"
+            python harness/run.py --target "$target"
+            python harness/check_regression.py --target "$target" | tee -a "$GITHUB_STEP_SUMMARY" || status=1
+            echo "" >> "$GITHUB_STEP_SUMMARY"
+          done
+          exit $status
+
+      - name: Upload the run details
+        if: always() && steps.key.outputs.present == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: eval-results
+          path: harness-repo/results/*/latest.json
+          if-no-files-found: ignore

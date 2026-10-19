@@ -15,6 +15,14 @@ A target is a folder under `targets/<name>/` holding:
     score(case: dict, output: dict) -> bool
         The deterministic check. Optional: a target with no ground truth omits it.
 
+    gold(case: dict) -> any
+        The ground truth to show the judge. Optional: omit it and the judge grades
+        the answer against the question alone.
+
+    code_hash() -> str
+        A short hash of the agent's source. Optional, but without it the output
+        cache cannot tell a changed agent from an unchanged one.
+
 Nothing else is required of a target. There is no base class to inherit and no
 registry to edit: `--target <name>` is the folder name.
 """
