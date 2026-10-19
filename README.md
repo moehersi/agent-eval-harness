@@ -56,7 +56,7 @@ graph LR
 | `harness/judge.py` | The judge prompt and verdict parsing. Nothing else in the repo contains a grading prompt. |
 | `harness/llm.py` | The judge's own LLM client, the retry policy and the rate-limit throttle. |
 | `harness/check_regression.py` | Compares the run to the baseline, prints a markdown diff, exits non-zero on a regression. |
-| `harness/validate_judge.py` | Exports cases for human labelling, then computes agreement and Cohen's kappa. |
+| `harness/validate_judge.py` | Exports cases for blind human labelling, then computes agreement and Cohen's kappa. |
 | `targets/<name>/` | One agent: `adapter.py`, `suite.jsonl`, `baseline.json`, and (optionally) `labels.csv` + `judge_validation.md`. |
 
 Deliberately absent: a plugin system, a config file format, a class hierarchy, a
@@ -195,6 +195,36 @@ all of which must hold:
 An unparseable judge reply counts as FAIL, never as a silent pass. The judge
 prompt is separate from every agent prompt and the two never see each other.
 
+### Is the judge any good?
+
+A judge nobody checked is just a second opinion with extra steps, so this one is
+measured against human labels and the result is committed to the repo:
+`targets/riyadh_sql/judge_validation.md`.
+
+Labelling is **blind**. `--export` writes two files:
+
+| file | contents |
+|---|---|
+| `labels-blind.csv` | what the human labels: id, question, gold result, agent answer, empty `human_label`. No judge verdict, no judge reason, and the rows shuffled so the judge's failures are not grouped together. |
+| `labels.csv` | the same cases in id order *with* the judge's verdict and reason, as the record. |
+
+`--compute` joins the two by case id. A labeller who can see the judge's answer
+is not an independent rater, and the agreement number would be measuring
+anchoring instead of the judge. Re-exporting refuses to overwrite labels already
+filled in unless you pass `--force`.
+
+```bash
+python harness/validate_judge.py --target riyadh_sql --export 30
+# fill in human_label (PASS / FAIL) in targets/riyadh_sql/labels-blind.csv
+python harness/validate_judge.py --target riyadh_sql --compute
+```
+
+The sample is stratified, not random: every case the judge failed is included,
+plus PASS cases drawn with a fixed seed. A random 30 out of a suite the judge
+passes 88% of would hold three or four failures, and the kappa would be noise.
+That makes the published figure agreement *on this sample*, which over-weights
+the hard cases on purpose — `judge_validation.md` says so next to the number.
+
 ## Regression check
 
 `check_regression.py` exits non-zero when any of these holds:
@@ -204,11 +234,32 @@ prompt is separate from every agent prompt and the two never see each other.
 | deterministic accuracy dropped | > 5 percentage points |
 | judge pass rate dropped | > 5 percentage points |
 | p95 latency rose | > 30% |
-| a case that passed in the baseline now fails | any single case |
+| a case that passed in the baseline now fails | twice in a row (see below) |
 
 The per-case gate is the one that catches a swap: an agent that breaks two cases
 and fixes two others leaves the headline numbers untouched. It is also the gate
 that fails first in practice.
+
+### Temperature 0 is not determinism
+
+Two identical back-to-back runs of this agent, same code and same suite, **flipped
+2 of 49 cases** (`h09` on the deterministic score, `h15` on the judge). So a
+single new failure is not evidence of a regression.
+
+A case that passed in the baseline and fails now therefore gets **exactly one
+more go** before it counts, and only a case that fails twice fails the build. The
+re-run is deliberately uncached - a cached re-run would replay the same answer and
+prove nothing - and it is reported either way:
+
+```
+Passed on the re-run, so not counted as a regression: h09 (deterministic).
+This agent flips a case or two between identical runs.
+```
+
+It fails closed: if the agent or judge cannot be reached, the re-run cannot clear
+anything and the first failure stands, with the reason printed. `--no-rerun`
+turns re-runs off for offline use. The rate gates are judged on the original run
+only; the 5 pp thresholds already absorb this much noise.
 
 ### Updating a baseline
 
@@ -240,7 +291,8 @@ inside it:
   still get through.
 - **Cache.** Agent outputs are cached under `.cache/<target>/<agent code hash>/`,
   keyed by target, case and a hash of the agent's source. Re-running after a
-  harness-only change costs judge calls only. Each case runs once per CI run.
+  harness-only change costs judge calls only. Each case runs once per CI run, plus
+  at most one re-run per case that newly fails.
 
 ## Responsible use of the agent under test
 

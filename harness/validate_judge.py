@@ -1,12 +1,18 @@
 """Measure the judge against human labels.
 
     python harness/validate_judge.py --target riyadh_sql --export 30
-    # ... a human fills in the human_label column (PASS / FAIL) ...
+    # ... a human fills human_label in labels-blind.csv (PASS / FAIL) ...
     python harness/validate_judge.py --target riyadh_sql --compute
 
-`--export` writes targets/<target>/labels.csv from the latest run, with an empty
-human_label column. `--compute` reads it back and writes judge_validation.md with
-raw agreement and Cohen's kappa.
+`--export` writes two files:
+
+  labels-blind.csv   what the human labels: id, kind, lang, question, gold, answer,
+                     human_label. No judge verdict, no judge reason, and the rows
+                     shuffled so the judge's failures are not grouped together. A
+                     labeller who can see the judge's answer is not an independent
+                     rater, and the agreement number would measure anchoring.
+  labels.csv         the full record for the repo, in id order, with the judge's
+                     verdict and reason. `--compute` joins the two by id.
 
 The sample is stratified, not random: every case the judge marked FAIL is
 included, then PASS cases are drawn with a fixed seed. On a suite the judge
@@ -27,15 +33,41 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from harness import adapter  # noqa: E402
 
-COLUMNS = ["id", "kind", "lang", "question", "gold", "answer", "judge_verdict", "judge_reason", "human_label"]
-SEED = 0
+FULL_COLUMNS = ["id", "kind", "lang", "question", "gold", "answer", "judge_verdict", "judge_reason"]
+BLIND_COLUMNS = ["id", "kind", "lang", "question", "gold", "answer", "human_label"]
+SAMPLE_SEED = 0
+SHUFFLE_SEED = 1
 
 
-def labels_path(target: str) -> Path:
+def full_path(target: str) -> Path:
     return adapter.target_dir(target) / "labels.csv"
 
 
-def export(target: str, n: int) -> int:
+def blind_path(target: str) -> Path:
+    return adapter.target_dir(target) / "labels-blind.csv"
+
+
+def read_csv(path: Path) -> list[dict]:
+    with path.open(encoding="utf-8-sig", newline="") as f:
+        return list(csv.DictReader(f))
+
+
+def write_csv(path: Path, columns: list[str], rows: list[dict]) -> None:
+    with path.open("w", encoding="utf-8-sig", newline="") as f:
+        writer = csv.DictWriter(f, fieldnames=columns, extrasaction="ignore")
+        writer.writeheader()
+        writer.writerows(rows)
+
+
+def export(target: str, n: int, force: bool) -> int:
+    blind = blind_path(target)
+    if blind.exists() and not force:
+        filled = [r["id"] for r in read_csv(blind) if (r.get("human_label") or "").strip()]
+        if filled:
+            print(f"{blind} already has {len(filled)} label(s) filled in. Refusing to overwrite "
+                  f"them.\nPass --force to discard them and export a fresh file.")
+            return 2
+
     latest = json.loads((adapter.results_dir(target) / "latest.json").read_text(encoding="utf-8"))
     records = latest["cases_detail"]
     impl = adapter.load(target)
@@ -43,24 +75,29 @@ def export(target: str, n: int) -> int:
 
     fails = [r for r in records if r["verdict"] == "FAIL"]
     passes = [r for r in records if r["verdict"] == "PASS"]
-    random.Random(SEED).shuffle(passes)
+    random.Random(SAMPLE_SEED).shuffle(passes)
     sample = sorted((fails + passes)[:n], key=lambda r: r["id"])
 
-    path = labels_path(target)
-    with path.open("w", encoding="utf-8-sig", newline="") as f:
-        writer = csv.DictWriter(f, fieldnames=COLUMNS)
-        writer.writeheader()
-        for r in sample:
-            gold = impl.gold(by_id[r["id"]]) if hasattr(impl, "gold") else None
-            writer.writerow({
-                "id": r["id"], "kind": r["kind"], "lang": r["lang"], "question": r["question"],
-                "gold": "not answerable from this database" if gold is None else json.dumps(gold, ensure_ascii=False, default=str),
-                "answer": r["answer"], "judge_verdict": r["verdict"], "judge_reason": r["reason"],
-                "human_label": "",
-            })
-    print(f"wrote {path} with {len(sample)} rows "
-          f'({len(fails)} the judge failed, {len(sample) - len(fails)} it passed).\n'
-          f'Fill in human_label with PASS or FAIL for every row, then run:\n'
+    rows = []
+    for r in sample:
+        gold = impl.gold(by_id[r["id"]]) if hasattr(impl, "gold") else None
+        rows.append({
+            "id": r["id"], "kind": r["kind"], "lang": r["lang"], "question": r["question"],
+            "gold": "not answerable from this database" if gold is None
+                    else json.dumps(gold, ensure_ascii=False, default=str),
+            "answer": r["answer"], "judge_verdict": r["verdict"], "judge_reason": r["reason"],
+            "human_label": "",
+        })
+
+    write_csv(full_path(target), FULL_COLUMNS, rows)
+    shuffled = list(rows)
+    random.Random(SHUFFLE_SEED).shuffle(shuffled)
+    write_csv(blind, BLIND_COLUMNS, shuffled)
+
+    print(f"wrote {blind} with {len(rows)} rows, shuffled, judge columns withheld "
+          f"({len(fails)} of them the judge failed - which row is which is not shown).\n"
+          f"wrote {full_path(target)} with the judge's verdicts, for the record.\n"
+          f"Fill in human_label with PASS or FAIL for every row of labels-blind.csv, then run:\n"
           f"  python harness/validate_judge.py --target {target} --compute")
     return 0
 
@@ -80,34 +117,47 @@ def kappa(pairs: list[tuple[str, str]]) -> tuple[float, float, dict]:
 
 
 def compute(target: str) -> int:
-    path = labels_path(target)
-    if not path.exists():
-        print(f"{path} is missing. Run --export first.")
-        return 2
-    with path.open(encoding="utf-8-sig", newline="") as f:
-        rows = list(csv.DictReader(f))
+    blind, full = blind_path(target), full_path(target)
+    for path in (blind, full):
+        if not path.exists():
+            print(f"{path} is missing. Run --export first.")
+            return 2
 
-    pairs, unlabeled, bad = [], [], []
-    for r in rows:
+    human_rows = read_csv(blind)
+    judge_by_id = {r["id"]: r for r in read_csv(full)}
+    stray = [r["id"] for r in human_rows if r["id"] not in judge_by_id]
+    if stray:
+        print(f'these ids in {blind.name} are not in {full.name}: {", ".join(stray)}.\n'
+              f"The two files are from different exports; re-export and label again.")
+        return 2
+
+    pairs, unlabeled, bad, merged = [], [], [], []
+    for r in human_rows:
         human = (r.get("human_label") or "").strip().upper()
+        judged = judge_by_id[r["id"]]
+        row = {**judged, "human_label": human}
+        merged.append(row)
         if not human:
             unlabeled.append(r["id"])
         elif human not in ("PASS", "FAIL"):
             bad.append(f'{r["id"]}={r["human_label"]!r}')
         else:
-            pairs.append((r["judge_verdict"].strip().upper(), human))
+            pairs.append((judged["judge_verdict"].strip().upper(), human))
 
     if bad:
         print(f'human_label must be PASS or FAIL. Bad values: {", ".join(bad)}')
         return 2
     if not pairs:
-        print(f"no rows in {path} have a human_label yet.")
+        print(f"no rows in {blind} have a human_label yet.")
         return 2
 
+    # Fold the labels into labels.csv so the repo keeps judge and human side by side.
+    write_csv(full, FULL_COLUMNS + ["human_label"], sorted(merged, key=lambda r: r["id"]))
+
     observed, k, cells = kappa(pairs)
-    disagreements = [r for r in rows
-                     if (r.get("human_label") or "").strip().upper() in ("PASS", "FAIL")
-                     and r["judge_verdict"].strip().upper() != r["human_label"].strip().upper()]
+    disagreements = [r for r in merged
+                     if r["human_label"] in ("PASS", "FAIL")
+                     and r["judge_verdict"].strip().upper() != r["human_label"]]
 
     latest = json.loads((adapter.results_dir(target) / "latest.json").read_text(encoding="utf-8"))
     md = [
@@ -116,9 +166,13 @@ def compute(target: str) -> int:
         f'Judge model `{latest["models"]["judge"]}`, temperature 0, prompt in `harness/judge.py`.',
         f'Labelled against the run of {latest["finished_at"]} (agent code `{latest["agent_code_hash"]}`).',
         "",
-        f"| | value |",
+        "Labels were collected blind: the human labelled `labels-blind.csv`, which omits the "
+        "judge's verdict and reason and is shuffled so the judge's failures are not grouped. "
+        "The two sides are joined by case id afterwards.",
+        "",
+        "| | value |",
         "|---|---|",
-        f"| labelled cases | {len(pairs)} of {len(rows)} exported |",
+        f"| labelled cases | {len(pairs)} of {len(merged)} exported |",
         f"| raw agreement | {observed:.1%} |",
         f"| Cohen's kappa | {k:.3f} |",
         "",
@@ -134,19 +188,22 @@ def compute(target: str) -> int:
     ]
     if unlabeled:
         md += ["", f'Unlabelled rows, excluded: {", ".join(unlabeled)}.']
+    md += ["", "## Where the judge and the human disagree", ""]
     if disagreements:
-        md += ["", "## Where the judge and the human disagree", ""]
         for r in disagreements:
-            md += [f'- `{r["id"]}` judge **{r["judge_verdict"]}**, human **{r["human_label"].strip().upper()}**',
+            md += [f'- `{r["id"]}` judge **{r["judge_verdict"]}**, human **{r["human_label"]}**',
                    f'  - question: {r["question"][:120]}',
                    f'  - answer: {r["answer"][:200]}',
                    f'  - judge reason: {r["judge_reason"][:200]}']
+    else:
+        md += ["None: the judge and the human agreed on every labelled case."]
     md += ["", "Regenerate with `python harness/validate_judge.py --target "
-           f'{target} --compute` after editing `labels.csv`.', ""]
+           f'{target} --compute` after editing `labels-blind.csv`.', ""]
 
     out = adapter.target_dir(target) / "judge_validation.md"
     out.write_text("\n".join(md), encoding="utf-8")
     print(f"agreement {observed:.1%}, Cohen's kappa {k:.3f} over {len(pairs)} labelled cases")
+    print(f"{len(disagreements)} disagreement(s)")
     print(f"wrote {out}")
     return 0
 
@@ -154,11 +211,12 @@ def compute(target: str) -> int:
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--target", required=True)
-    ap.add_argument("--export", type=int, metavar="N", help="export N cases to labels.csv")
-    ap.add_argument("--compute", action="store_true", help="read labels.csv, write judge_validation.md")
+    ap.add_argument("--export", type=int, metavar="N", help="export N cases for labelling")
+    ap.add_argument("--force", action="store_true", help="with --export: overwrite labels already filled in")
+    ap.add_argument("--compute", action="store_true", help="join the labels, write judge_validation.md")
     args = ap.parse_args()
     if args.export:
-        return export(args.target, args.export)
+        return export(args.target, args.export, args.force)
     if args.compute:
         return compute(args.target)
     ap.error("pass --export N or --compute")

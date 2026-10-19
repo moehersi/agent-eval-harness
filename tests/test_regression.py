@@ -92,8 +92,9 @@ def test_p95_latency_rise_within_30pct_passes(check):
 def test_a_case_that_passed_before_now_failing_fails(check, broken):
     cases = passing_cases(3) + [{"id": "c4", **broken, "question": "q", "answer": "a", "reason": "r"}]
     # The rates are left unchanged on purpose: this proves the per-case gate alone
-    # catches a swap that leaves the headline numbers looking fine.
-    code, out = check(latest(cases=cases))
+    # catches a swap that leaves the headline numbers looking fine. --no-rerun keeps
+    # the test about the gate rather than about the re-run.
+    code, out = check(latest(cases=cases), args=("--no-rerun",))
     assert code == 1 and "c4" in out
 
 
@@ -118,3 +119,57 @@ def test_update_baseline_writes_per_case_results(check, tmp_path):
     written = json.loads((tmp_path / "targets" / "fake" / "baseline.json").read_text(encoding="utf-8"))
     assert written["cases"]["c1"] == {"score": True, "verdict": "PASS"}
     assert "cases_detail" not in written  # a tripwire, not an archive
+
+
+# --- the re-run gate ---------------------------------------------------------
+# A case that passed in the baseline and fails now gets exactly one more go,
+# because two identical runs of a temperature-0 LLM agent still flip a case or two.
+
+def regressed_latest():
+    cases = passing_cases(3) + [{"id": "c4", "score": False, "verdict": "FAIL",
+                                 "question": "q", "answer": "a", "reason": "r"}]
+    return latest(cases=cases)
+
+
+def test_rerun_that_passes_clears_the_case(check, monkeypatch):
+    monkeypatch.setattr(check_regression, "rerun", lambda target, ids: {i: (True, True) for i in ids})
+    code, out = check(regressed_latest())
+    assert code == 0, out
+    assert "Passed on the re-run" in out and "c4" in out
+
+
+def test_rerun_that_fails_again_is_a_regression(check, monkeypatch):
+    monkeypatch.setattr(check_regression, "rerun", lambda target, ids: {i: (False, False) for i in ids})
+    code, out = check(regressed_latest())
+    assert code == 1 and "fail twice" in out and "c4" in out
+
+
+def test_rerun_only_clears_the_dimension_that_recovered(check, monkeypatch):
+    # Failed on both; the re-run fixes the deterministic score but not the judge.
+    monkeypatch.setattr(check_regression, "rerun", lambda target, ids: {i: (True, False) for i in ids})
+    code, out = check(regressed_latest())
+    assert code == 1 and "c4 (judge)" in out
+
+
+def test_rerun_failure_fails_closed(check, monkeypatch):
+    def boom(target, ids):
+        raise RuntimeError("no API key")
+
+    monkeypatch.setattr(check_regression, "rerun", boom)
+    code, out = check(regressed_latest())
+    assert code == 1, out
+    assert "Could not re-run" in out and "no API key" in out
+
+
+def test_no_rerun_flag_fails_on_the_first_failure(check, monkeypatch):
+    monkeypatch.setattr(check_regression, "rerun",
+                        lambda target, ids: pytest.fail("rerun must not be called with --no-rerun"))
+    code, out = check(regressed_latest(), args=("--no-rerun",))
+    assert code == 1 and "Re-runs disabled" in out
+
+
+def test_a_clean_run_never_triggers_a_rerun(check, monkeypatch):
+    monkeypatch.setattr(check_regression, "rerun",
+                        lambda target, ids: pytest.fail("nothing failed; nothing to re-run"))
+    code, out = check(latest())
+    assert code == 0, out
