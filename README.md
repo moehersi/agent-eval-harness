@@ -14,6 +14,9 @@ the agreement rate and Cohen's kappa are published in the repo
 The first agent wired up is [riyadh-sql-agent](https://github.com/moehersi/riyadh-sql-agent),
 a LangGraph text-to-SQL agent over a Riyadh food-delivery SQLite database.
 
+New to any of this? [`WALKTHROUGH.md`](WALKTHROUGH.md) explains every idea in the
+harness in plain language, including the four bugs found while building it.
+
 ## Why not just run the agent's own eval?
 
 The agent's own eval set was saturated: `gemini-flash-lite` scored 20/20, so it
@@ -176,6 +179,47 @@ orders) and two were decided by a tie (five of six categories share a
 highest-value order; two customers in Al Malaz are tied on spend). `pytest`
 re-runs every gold query, so if the data shifts under the suite the tests say so.
 
+## Results
+
+Every number below comes from a real run on this machine, written by
+`harness/run.py`. The committed baseline is `targets/riyadh_sql/baseline.json`.
+
+Agent `gemini-flash-lite-latest`, judge `gemini-flash-lite-latest`, 49 cases,
+run of 2026-10-19:
+
+| metric | value |
+|---|---|
+| deterministic accuracy | 89.8% (44/49) |
+| judge pass rate | 87.8% (43/49) |
+| p50 latency | 2.07s |
+| p95 latency | 4.16s |
+| agent tokens in/out | 20,903 / 4,085 |
+| judge tokens in/out | 17,508 / 1,977 |
+| estimated cost per question | $0.00 (free tier; tokens are the figure that matters) |
+| LLM calls retried for rate limits | 0 |
+
+For comparison, the agent's own 20-question set scores **20/20** with the same
+model. The point of the harness is the 49-case suite that does not.
+
+### What the two gates each caught
+
+Six cases failed. Three of them are the reason an LLM judge is in the harness at
+all:
+
+| case | what happened | deterministic | judge |
+|---|---|---|---|
+| `d04` | Asked in Arabic for a 5-star delivery rating, which is not in the database, the agent ran `SELECT avg(actual_delivery_min)` and answered "متوسط تقييم العملاء... هو 34.32" — reporting average delivery **minutes** as a star rating. | FAIL | FAIL |
+| `a04` | Wrote `WHERE district = 'الملز'` instead of `'Al Malaz'`, got zero rows, and confidently answered "0 customers". The true answer is 30. | FAIL | FAIL |
+| `h08` | Returned all 12 correct monthly rows, then summarised them as a range instead of answering per month. **Rows right, answer wrong.** | pass | FAIL |
+| `h09` | Grouped by `month_name` instead of `YYYY-MM`, so the rows do not match the gold result. | FAIL | FAIL |
+| `h10` | Computed Al Olaya at 8546.0 SAR against a gold 8691.0. | FAIL | FAIL |
+| `d03` | Declined in prose ("the phone number... is not available") instead of the fixed refusal string. | FAIL | FAIL |
+
+`h08` is the case that justifies the judge: the rows matched the gold SQL exactly,
+so every row-matching eval in the world passes it, and the answer still does not
+answer the question. `d04` is the case that justifies the "no invented numbers"
+criterion — a confident number with a plausible unit attached.
+
 ## Grading
 
 **Deterministic score.** For a query case, the agent's rows are matched against
@@ -225,6 +269,25 @@ passes 88% of would hold three or four failures, and the kappa would be noise.
 That makes the published figure agreement *on this sample*, which over-weights
 the hard cases on purpose — `judge_validation.md` says so next to the number.
 
+**Measured on 30 blind human labels:**
+
+| | value |
+|---|---|
+| raw agreement | 96.7% |
+| Cohen's kappa | 0.889 |
+
+| | human PASS | human FAIL |
+|---|---|---|
+| judge PASS | 24 | 0 |
+| judge FAIL | 1 | 5 |
+
+No false passes: the judge never waved through an answer the human failed. The
+one disagreement is `d03`, where the judge is *stricter* than the human rubric —
+the agent said "the phone number for customer CUST001 is not available", the
+human counted that as a refusal, and the judge wanted a plain refusal with no
+explanation. That is a rubric gap, not a judge error, and it is recorded in
+`judge_validation.md` rather than smoothed away.
+
 ## Regression check
 
 `check_regression.py` exits non-zero when any of these holds:
@@ -261,6 +324,40 @@ anything and the first failure stands, with the reason printed. `--no-rerun`
 turns re-runs off for offline use. The rate gates are judged on the original run
 only; the 5 pp thresholds already absorb this much noise.
 
+### Proving the gate actually fires
+
+A gate nobody watched fail is not known to work, so the agent's repo carries a
+branch, `weak-prompt`, whose only change is a deliberately degraded prompt in
+`generate`: the column names are dropped from the schema block (table names
+only) and the "booleans are 0/1, dates are TEXT" hints are removed. It is the
+realistic version of this regression — someone trimming a prompt to save tokens.
+
+Run the harness against it with `SQL_AGENT_PATH` pointing at that branch, or in
+CI with `workflow_dispatch` and `agent_ref: weak-prompt`.
+
+**Measured so far, on the 19 cases the run completed before the daily free-tier
+quota ran out** (identical cases, identical judge, identical harness):
+
+| | baseline (`answer-node`) | weakened prompt |
+|---|---|---|
+| deterministic score | 19/19 | **3/19** |
+| judge pass | 19/19 | **3/19** |
+
+That is an 84 percentage point drop on the overlapping subset, against gates that
+trip at 5. Sixteen cases that passed in the baseline fail on the weakened prompt.
+
+The complete 49-case red run, and a captured red CI run for this README, are
+**still pending** — the free tier allows 500 requests a day and one full run costs
+147, so the quota was exhausted. Finish it with:
+
+```bash
+cd ../riyadh-sql-agent && git checkout weak-prompt
+cd ../agent-eval-harness
+python harness/run.py --target riyadh_sql        # 19 of 49 cases are already cached
+python harness/check_regression.py --target riyadh_sql   # expect exit code 1
+cd ../riyadh-sql-agent && git checkout answer-node       # never leave it weakened
+```
+
 ### Updating a baseline
 
 A baseline is only ever updated on purpose:
@@ -279,16 +376,22 @@ the baseline.
 
 ## Staying inside the free tier
 
-The Gemini free tier is a real constraint, and three things keep the harness
-inside it:
+The Gemini free tier has two limits, and the day limit is the one that bites:
+**15 requests per minute and 500 per day** for `gemini-flash-lite-latest` (which
+resolves to `gemini-3.5-flash-lite`). One full 49-case run costs **147 requests**
+— 51 `generate` calls, 47 answer-node calls, 49 judge calls — so the free tier
+allows about **three full runs a day**. Four things keep the harness inside it:
 
 - **Throttle.** Requests are spaced to `LLM_RPM` (default 15/min). Without it the
   free tier returns 429s and the retry backoff sleeps *inside* the measured call —
   an early run recorded 53.8s for a question that actually takes 1.4s, which would
   have made the p95 latency gate a reading of Google's rate limiter. The throttle's
   own waiting is subtracted from the reported latency.
-- **Retry.** `with_retry` (exponential backoff with jitter) absorbs the 429s that
-  still get through.
+- **Retry, with a timeout.** Jittered exponential backoff absorbs the 429s that
+  still get through. Every request also carries a 90s timeout
+  (`LLM_TIMEOUT_S`): the client defaults to *no* timeout, and a single stalled
+  request once hung a whole run — in CI that would hold a runner until its
+  six-hour limit with nothing in the log.
 - **Cache.** Agent outputs are cached under `.cache/<target>/<agent code hash>/`,
   keyed by target, case and a hash of the agent's source. Re-running after a
   harness-only change costs judge calls only. Each case runs once per CI run, plus

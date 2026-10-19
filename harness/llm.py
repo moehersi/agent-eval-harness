@@ -15,6 +15,8 @@ from dotenv import load_dotenv
 load_dotenv()
 
 RETRIES = int(os.getenv("LLM_RETRIES", "5"))
+TIMEOUT_S = float(os.getenv("LLM_TIMEOUT_S", "90"))  # no timeout means a hung
+                                                    # request blocks CI until the runner dies
 RPM = float(os.getenv("LLM_RPM", "10"))  # under the free tier flash-lite limit of 15/min
 _MIN_INTERVAL = 60.0 / RPM if RPM > 0 else 0.0
 _last_request = 0.0
@@ -31,7 +33,10 @@ def client():
     if os.getenv("BACKEND", "gemini") == "gemini":
         from langchain_google_genai import ChatGoogleGenerativeAI
 
-        llm = ChatGoogleGenerativeAI(model=model_name(), temperature=0)
+        # max_retries=0: retrying is this harness's job, and two retry layers
+        # stacked turn one slow call into minutes of invisible waiting.
+        llm = ChatGoogleGenerativeAI(model=model_name(), temperature=0,
+                                     timeout=TIMEOUT_S, max_retries=0)
     else:
         from langchain_ollama import ChatOllama
 

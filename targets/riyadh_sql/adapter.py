@@ -19,7 +19,7 @@ import sys
 import time
 from pathlib import Path
 
-from harness.llm import RETRIES, throttle, usage
+from harness.llm import RETRIES, TIMEOUT_S, throttle, usage
 
 HARNESS_ROOT = Path(__file__).resolve().parents[2]
 AGENT_PATH = Path(os.getenv("SQL_AGENT_PATH") or HARNESS_ROOT.parent / "riyadh-sql-agent").resolve()
@@ -48,6 +48,13 @@ class _Meter:
 
     def __init__(self, llm):
         self._llm = llm
+        # The agent builds its own client with no request timeout. Left alone, one
+        # hung call stalls the whole run - which is exactly what happened once.
+        for field, value in (("timeout", TIMEOUT_S), ("max_retries", 0)):
+            try:
+                setattr(llm, field, value)
+            except Exception:  # a backend that has no such field is fine as-is
+                pass
         self.tokens_in = self.tokens_out = self.retries = 0
         self.overhead_s = 0.0
 
