@@ -280,13 +280,7 @@ Three honest limitations, so you are not surprised later:
    include all six the judge failed, on purpose, because a random sample would
    have had too few failures to compute a meaningful kappa. It is agreement on
    *that* sample, not on the suite. The file says so next to the number.
-3. **The regression demo is only partly measured.** The weakened-prompt branch
-   exists and the harness was run against it, but the daily quota ran out at case
-   19 of 49. On those 19 cases the weakened agent scored 3/19 where the baseline
-   scored 19/19 — the gate would fire many times over — but the full red run and
-   the red CI screenshot are still outstanding. The README says so rather than
-   rounding it up to "demonstrated".
-4. **The suite will saturate eventually.** Right now the agent scores 89.8% and
+3. **The suite will saturate eventually.** Right now the agent scores 89.8% and
    there is headroom. When a better model scores 49/49, the suite stops being
    able to detect anything and needs harder cases — the same problem the original
    20 questions had. Saturation is not a victory, it is a maintenance task.

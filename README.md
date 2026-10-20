@@ -336,27 +336,42 @@ realistic version of this regression — someone trimming a prompt to save token
 Run the harness against it with `SQL_AGENT_PATH` pointing at that branch, or in
 CI with `workflow_dispatch` and `agent_ref: weak-prompt`.
 
-**Measured so far, on the 19 cases the run completed before the daily free-tier
-quota ran out** (identical cases, identical judge, identical harness):
+**Measured on the full 49-case suite** (identical cases, identical judge,
+identical harness, only the agent's source differs):
 
-| | baseline (`answer-node`) | weakened prompt |
-|---|---|---|
-| deterministic score | 19/19 | **3/19** |
-| judge pass | 19/19 | **3/19** |
+| metric | baseline | weakened prompt | change |
+|---|---|---|---|
+| deterministic accuracy | 89.8% | 18.4% | **-71.4 pp** |
+| judge pass rate | 87.8% | 18.4% | **-69.4 pp** |
+| p50 latency | 2.06s | 2.64s | +0.58s |
+| p95 latency | 4.16s | 7.10s | **+71%** |
 
-That is an 84 percentage point drop on the overlapping subset, against gates that
-trip at 5. Sixteen cases that passed in the baseline fail on the weakened prompt.
+`check_regression.py --target riyadh_sql` exits **1** and fires every gate it
+has:
 
-The complete 49-case red run, and a captured red CI run for this README, are
-**still pending** — the free tier allows 500 requests a day and one full run costs
-147, so the quota was exhausted. Finish it with:
+- accuracy fell 71.4 pp (limit 5 pp)
+- judge pass rate fell 69.4 pp (limit 5 pp)
+- p95 latency rose 71% (limit 30%)
+- 33 cases that passed in the baseline now fail twice (re-run did not clear
+  them) — `a01 a02 a03 e02 e04 e05 e07 e08 e09 e10 e11 e12 e13 e14 e15 e16 e17
+  e19 e20 h01 h02 h03 h05 h06 h07 h08 h11 h12 h13 h15 h16 h17 h20`
+
+Two cases (`d03`, `d04`) newly pass — the weakened prompt happens to help the
+refusal/rating cases, which is itself informative: a "drop the column names"
+regression does not uniformly make every case worse, it is still caught
+because the *aggregate* and the *per-case tripwire* both move. Four cases
+(`a05`, `e18`, `h14`, `h18`) failed once and passed on the mandatory re-run —
+the agent is non-deterministic at temperature 0, which is exactly why the gate
+re-runs a suspect before counting it.
+
+To reproduce:
 
 ```bash
 cd ../riyadh-sql-agent && git checkout weak-prompt
 cd ../agent-eval-harness
-python harness/run.py --target riyadh_sql        # 19 of 49 cases are already cached
-python harness/check_regression.py --target riyadh_sql   # expect exit code 1
-cd ../riyadh-sql-agent && git checkout answer-node       # never leave it weakened
+python harness/run.py --target riyadh_sql
+python harness/check_regression.py --target riyadh_sql   # exits 1
+cd ../riyadh-sql-agent && git checkout master            # never leave it weakened
 ```
 
 ### Updating a baseline
