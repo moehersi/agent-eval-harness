@@ -24,12 +24,7 @@ jobs:
           repository: moehersi/riyadh-sql-agent
           # workflow_dispatch can aim this at any ref; a pull_request run always
           # tests master, so the gate is never accidentally measured against a branch.
-          #
-          # NOTE: the committed baseline was produced by the agent's `answer-node`
-          # branch. Until that branch is merged into master, a default run tests an
-          # agent with no answer node, every answer is empty, and the judge fails the
-          # whole suite - red for the wrong reason. Merge answer-node first, or
-          # dispatch with agent_ref=answer-node.
+          # The committed baseline matches master (answer-node was merged into it).
           ref: ${{ inputs.agent_ref || 'master' }}
           path: riyadh-sql-agent
 
