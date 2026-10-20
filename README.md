@@ -15,7 +15,8 @@ The first agent wired up is [riyadh-sql-agent](https://github.com/moehersi/riyad
 a LangGraph text-to-SQL agent over a Riyadh food-delivery SQLite database.
 
 New to any of this? [`WALKTHROUGH.md`](WALKTHROUGH.md) explains every idea in the
-harness in plain language, including the four bugs found while building it.
+harness in plain language, including the five bugs found while building it.
+[`NEXT.md`](NEXT.md) records exactly where the work stands and what is left.
 
 ## Why not just run the agent's own eval?
 
